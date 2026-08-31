@@ -148,6 +148,47 @@ test.describe('a11y', () => {
 });
 
 test.describe('Navigation lifecycle functions', () => {
+	test('beforeunload listener only exists while beforeNavigate callbacks are registered', async ({
+		page,
+		app
+	}) => {
+		await page.addInitScript(`
+			const listeners = new Set();
+			const add_event_listener = window.addEventListener;
+			const remove_event_listener = window.removeEventListener;
+
+			window.addEventListener = function (type, listener, options) {
+				if (type === 'beforeunload') listeners.add(listener);
+				return add_event_listener.call(this, type, listener, options);
+			};
+
+			window.removeEventListener = function (type, listener, options) {
+				if (type === 'beforeunload') listeners.delete(listener);
+				return remove_event_listener.call(this, type, listener, options);
+			};
+
+			window.beforeunload_listener_count = () => listeners.size;
+		`);
+
+		const listener_count = () =>
+			page.evaluate(() => /** @type {any} */ (window).beforeunload_listener_count());
+
+		await page.goto('/navigation-lifecycle/before-navigate/a', { wait_for_started: false });
+		await page.waitForFunction(() => document.body.classList.contains('started'));
+		const baseline = process.env.DEV ? 1 : 0;
+		expect(await listener_count()).toBe(baseline);
+
+		await app.goto('/navigation-lifecycle/before-navigate/event/a');
+		expect(await listener_count()).toBe(baseline + 1);
+
+		await app.goto('/navigation-lifecycle/before-navigate/a');
+		expect(await listener_count()).toBe(baseline);
+
+		expect(await page.evaluate(() => history.scrollRestoration)).toBe('manual');
+		await page.evaluate(() => dispatchEvent(new Event('pagehide')));
+		expect(await page.evaluate(() => history.scrollRestoration)).toBe('auto');
+	});
+
 	test('beforeNavigate prevents navigation triggered by link click', async ({ page, baseURL }) => {
 		await page.goto('/navigation-lifecycle/before-navigate/prevent-navigation');
 

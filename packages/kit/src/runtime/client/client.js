@@ -2594,7 +2594,21 @@ export function afterNavigate(callback) {
  * @returns {void}
  */
 export function beforeNavigate(callback) {
-	add_navigation_callback(before_navigate_callbacks, callback);
+	onMount(() => {
+		before_navigate_callbacks.add(callback);
+
+		if (before_navigate_callbacks.size === 1) {
+			addEventListener('beforeunload', on_beforeunload);
+		}
+
+		return () => {
+			before_navigate_callbacks.delete(callback);
+
+			if (before_navigate_callbacks.size === 0) {
+				removeEventListener('beforeunload', on_beforeunload);
+			}
+		};
+	});
 }
 
 /**
@@ -3154,6 +3168,35 @@ export async function set_nearest_error_page(error) {
 	}
 }
 
+/** @param {BeforeUnloadEvent} e */
+function on_beforeunload(e) {
+	let should_block = false;
+
+	persist_state();
+
+	if (!is_navigating) {
+		const nav = create_navigation(current, undefined, null, 'leave');
+
+		// If we're navigating, beforeNavigate was already called. If we end up in here during navigation,
+		// it's due to an external or full-page-reload link, for which we don't want to call the hook again.
+		/** @type {BeforeNavigate} */
+		const navigation = {
+			...nav.navigation,
+			cancel: () => {
+				should_block = true;
+				nav.reject(new Error('navigation cancelled'));
+			}
+		};
+
+		before_navigate_callbacks.forEach((fn) => fn(navigation));
+	}
+
+	if (should_block) {
+		e.preventDefault();
+		e.returnValue = '';
+	}
+}
+
 function _start_router() {
 	history.scrollRestoration = 'manual';
 
@@ -3161,34 +3204,8 @@ function _start_router() {
 	// Reset scrollRestoration to auto when leaving page, allowing page reload
 	// and back-navigation from other pages to use the browser to restore the
 	// scrolling position.
-	addEventListener('beforeunload', (e) => {
-		let should_block = false;
-
-		persist_state();
-
-		if (!is_navigating) {
-			const nav = create_navigation(current, undefined, null, 'leave');
-
-			// If we're navigating, beforeNavigate was already called. If we end up in here during navigation,
-			// it's due to an external or full-page-reload link, for which we don't want to call the hook again.
-			/** @type {BeforeNavigate} */
-			const navigation = {
-				...nav.navigation,
-				cancel: () => {
-					should_block = true;
-					nav.reject(new Error('navigation cancelled'));
-				}
-			};
-
-			before_navigate_callbacks.forEach((fn) => fn(navigation));
-		}
-
-		if (should_block) {
-			e.preventDefault();
-			e.returnValue = '';
-		} else {
-			history.scrollRestoration = 'auto';
-		}
+	addEventListener('pagehide', () => {
+		history.scrollRestoration = 'auto';
 	});
 	addEventListener('visibilitychange', () => {
 		if (document.visibilityState === 'hidden') {
